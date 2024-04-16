@@ -14,39 +14,39 @@ import (
 // вызывается функция fn. Она служит для подсчёта количества и суммы
 // сгенерированных чисел.
 func Generator(ctx context.Context, ch chan<- int64, fn func(int64)) {
-
-	defer close(ch)
-	for i := int64(1); ; i++ {
+	// 1. Функция Generator
+	for i := 1; ; i++ {
 		select {
 		case <-ctx.Done():
+			close(ch)
 			return
-		case ch <- i:
-			fn(i)
+		case ch <- int64(i):
+			fn(int64(i))
 		}
+
 	}
 }
 
 // Worker читает число из канала in и пишет его в канал out.
 func Worker(in <-chan int64, out chan<- int64) {
-	defer close(out)
-	for i := range in {
-		out <- i
+	// 2. Функция Worker
+	for {
+		v, ok := <-in
+		if !ok {
+			close(out)
+			return
+		}
+		out <- v
+		time.Sleep(1 * time.Millisecond)
 	}
 }
 
 func main() {
 	chIn := make(chan int64)
 
-	var wgCtx sync.WaitGroup
-	wgCtx.Add(1)
 	// 3. Создание контекста
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
-
-	context.AfterFunc(ctx, func() {
-		wgCtx.Done()
-		return
-	})
 
 	// для проверки будем считать количество и сумму отправленных чисел
 	var inputSum int64   // сумма сгенерированных чисел
@@ -73,19 +73,17 @@ func main() {
 	chOut := make(chan int64, NumOut)
 
 	var wg sync.WaitGroup
-	var mx sync.Mutex
 
 	// 4. Собираем числа из каналов outs
-	for i := 0; i < NumOut; i++ {
+	for i, out := range outs {
 		wg.Add(1)
-		go func(i int) {
-			v := <-outs[i]
-			mx.Lock()
-			amounts[i] = v
-			mx.Unlock()
-			chOut <- v
+		go func(in <-chan int64, i int) {
 			defer wg.Done()
-		}(i)
+			for v := range in {
+				chOut <- v
+				amounts[i]++
+			}
+		}(out, i)
 	}
 
 	go func() {
@@ -99,20 +97,11 @@ func main() {
 	var sum int64   // сумма чисел результирующего канала
 
 	// 5. Читаем числа из результирующего канала
-	go func(ch <-chan int64) {
-		wgCtx.Add(1)
-		defer wgCtx.Done()
-		for {
-			num, ok := <-ch
-			if !ok {
-				return
-			}
-			atomic.AddInt64(&count, 1)
-			atomic.AddInt64(&sum, num)
-		}
-	}(chOut)
 
-	wgCtx.Wait()
+	for v := range chOut {
+		sum += v
+		count++
+	}
 
 	fmt.Println("Количество чисел", inputCount, count)
 	fmt.Println("Сумма чисел", inputSum, sum)
